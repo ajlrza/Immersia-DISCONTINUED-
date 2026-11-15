@@ -2,40 +2,154 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>World Engine</title>
+    <link rel="stylesheet" href="src/css/style.css">
+    <script src="src/ts_scripts/script.ts" defer></script>
   </head>
   <body>
-    <h1>World Engine</h1>
+    <main class="app">
+      <header class="topbar">
+        <h1 class="title">Immersia</h1>
+        <nav class="controls">
+          <button type="button" id="log-toggle" class="ghost" aria-pressed="false">Log</button>
+          <button type="button" id="raw-toggle" class="ghost" aria-pressed="false">Raw</button>
+        </nav>
+      </header>
 
-    <form id="action-form">
-      <input id="action" placeholder="What do you do?" required autofocus>
-      <button type="submit">Send</button>
-    </form>
+      <section class="stage" aria-label="Scene">
+        <div class="scene">
+          <div class="sprite" aria-hidden="true"></div>
+        </div>
 
-    <h2>Output</h2>
-    <pre id="output">No actions yet.</pre>
+        <div class="dialogue" id="dialogue" aria-live="polite">
+          <span class="speaker" id="speaker" hidden></span>
+          <p class="line" id="line">The world is quiet. What do you do?</p>
+          <span class="advance" aria-hidden="true">▾</span>
+        </div>
+
+        <aside class="log" id="log" hidden>
+          <h2 class="log-title">History</h2>
+          <ol class="log-list" id="log-list"></ol>
+        </aside>
+      </section>
+
+      <form id="action-form" class="action-bar">
+        <input id="action" placeholder="What do you do?" required autofocus autocomplete="off">
+        <button type="submit">Send</button>
+      </form>
+
+      <pre id="output" class="raw" hidden>No actions yet.</pre>
+    </main>
 
     <script>
       const form = document.getElementById("action-form");
       const input = document.getElementById("action");
       const output = document.getElementById("output");
+      const sendBtn = form.querySelector("button");
+
+      const dialogue = document.getElementById("dialogue");
+      const speakerEl = document.getElementById("speaker");
+      const lineEl = document.getElementById("line");
+      const logPanel = document.getElementById("log");
+      const logList = document.getElementById("log-list");
+      const logToggle = document.getElementById("log-toggle");
+      const rawToggle = document.getElementById("raw-toggle");
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let timer = null;
+      let fullText = "";
+
+      function toScene(data) {
+        if (typeof data === "string") return { speaker: null, text: data };
+        if (data.background) {
+            document.getElementById("scene").style.setProperty("--scene-bg", `url("${data.background}")`);
+        }
+        const text = data.narration ?? data.text ?? data.message ?? data.result ?? data.description;
+        const speaker = data.speaker ?? data.character ?? null;
+        return {
+          speaker,
+          text: text != null ? String(text) : JSON.stringify(data, null, 2)
+        };
+      }
+
+      function finishLine() {
+        clearInterval(timer);
+        lineEl.textContent = fullText;
+        dialogue.classList.remove("typing");
+      }
+
+      function showLine(speaker, text) {
+        clearInterval(timer);
+        dialogue.classList.remove("thinking");
+        speakerEl.hidden = !speaker;
+        speakerEl.textContent = speaker || "";
+        fullText = text;
+
+        if (reduceMotion) return finishLine();
+
+        lineEl.textContent = "";
+        dialogue.classList.add("typing");
+        let i = 0;
+        timer = setInterval(() => {
+          lineEl.textContent = text.slice(0, ++i);
+          if (i >= text.length) finishLine();
+        }, 18);
+      }
+
+      function addLog(who, text, isPlayer = false) {
+        const li = document.createElement("li");
+        if (isPlayer) li.className = "from-player";
+        const name = document.createElement("strong");
+        name.textContent = who;
+        li.append(name, document.createTextNode(text));
+        logList.append(li);
+        logPanel.scrollTop = logPanel.scrollHeight;
+      }
+
+      function togglePanel(btn, panel) {
+        const open = panel.hidden;
+        panel.hidden = !open;
+        btn.setAttribute("aria-pressed", String(open));
+      }
+
+      dialogue.addEventListener("click", finishLine);
+      logToggle.addEventListener("click", () => togglePanel(logToggle, logPanel));
+      rawToggle.addEventListener("click", () => togglePanel(rawToggle, output));
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
+        const action = input.value.trim();
+        if (!action) return;
+
+        addLog("You", action, true);
+        clearInterval(timer);
+        speakerEl.hidden = true;
+        lineEl.textContent = "";
+        dialogue.classList.add("thinking");
         output.textContent = "Thinking...";
+        sendBtn.disabled = true;
 
         try {
           const res = await fetch("/act", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: input.value })
+            body: JSON.stringify({ action })
           });
           if (!res.ok) throw new Error("Server returned " + res.status);
           const data = await res.json();
+
           output.textContent = JSON.stringify(data, null, 2);
+          const { speaker, text } = toScene(data);
+          showLine(speaker, text);
+          addLog(speaker || "Narrator", text);
           input.value = "";
         } catch (err) {
           output.textContent = "Error: " + err.message;
+          showLine("System", "Something went wrong — " + err.message);
+        } finally {
+          sendBtn.disabled = false;
+          input.focus();
         }
       });
     </script>
